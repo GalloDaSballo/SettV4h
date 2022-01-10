@@ -38,6 +38,9 @@ import "../interfaces/IGac.sol";
 
     V1.4
     * Add depositFor() to deposit on the half of other users. That user will then be blockLocked.
+    
+    V1.Rem
+    * RemBadger Version
 */
 
 contract SettV4h is ERC20Upgradeable, SettAccessControlDefended, PausableUpgradeable {
@@ -61,10 +64,14 @@ contract SettV4h is ERC20Upgradeable, SettAccessControlDefended, PausableUpgrade
     string internal constant _symbolSymbolPrefix = "b";
 
     address public guardian;
-
+    
+    // Packed in same slot (and I believe the slot goes hot in deposits so ideal)
     BadgerGuestListAPI public guestList;
+    bool public depositsEnded;
 
     event FullPricePerShareUpdated(uint256 value, uint256 indexed timestamp, uint256 indexed blockNumber);
+
+    event DepositBricked(uint256 indexed timestamp);
 
     modifier whenNotPaused() override {
         require(!paused(), "Pausable: paused");
@@ -114,6 +121,35 @@ contract SettV4h is ERC20Upgradeable, SettAccessControlDefended, PausableUpgrade
         _pause();
     }
 
+
+    /// @dev Sets `depositsEnded` to true blocking deposits forever
+    /// @notice automatically called when calling `mintExtra`
+    function brickDeposits() public {
+        _onlyGovernance();
+        depositsEnded = true;
+
+        emit DepositBricked(block.timestamp);
+    }
+
+    /// @dev Mint more shares, diluting the ppfs
+    /// @notice This bricks deposit to avoid griefing, can only call once!!
+    function mintExtra(uint256 amount) external {
+        require(!depositsEnded, "You can mint extra only until you brick deposits");
+        _onlyGovernance();
+        
+        // Mint Tokens, making the price of tokens below 1
+        _mint(msg.sender, amount);
+
+        // Brick deposits from now on
+        brickDeposits();
+    }
+
+    /// @dev Transfer funds from caller to this contract
+    /// @notice This will increase pricePerShare
+    function addWant(uint256 amount) external {
+        token.safeTransferFrom(msg.sender, address(this), amount);
+    }
+
     /// ===== Modifiers =====
 
     function _onlyController() internal view {
@@ -135,7 +171,7 @@ contract SettV4h is ERC20Upgradeable, SettAccessControlDefended, PausableUpgrade
     /// ===== View Functions =====
 
     function version() public view returns (string memory) {
-        return "1.4h - Hack Amended";
+        return "1.4r - remBadger";
     }
 
     function getPricePerFullShare() public virtual view returns (uint256) {
@@ -325,6 +361,7 @@ contract SettV4h is ERC20Upgradeable, SettAccessControlDefended, PausableUpgrade
     }
 
     function _depositFor(address recipient, uint256 _amount) internal virtual {
+        require(!depositsEnded, "No longer accepting Deposits");
         uint256 _pool = balance();
         uint256 _before = token.balanceOf(address(this));
         token.safeTransferFrom(msg.sender, address(this), _amount);
@@ -400,34 +437,5 @@ contract SettV4h is ERC20Upgradeable, SettAccessControlDefended, PausableUpgrade
         _blacklisted(sender);
         require(!GAC.transferFromDisabled(), "transferFrom: GAC transferFromDisabled");
         return super.transferFrom(sender, recipient, amount);
-    }
-
-
-    function patchBalances() external {
-        _onlyGovernance();
-
-        address payable[11] memory EXPLOITER_ADDRESS = [
-            0x1FCdb04d0C5364FBd92C73cA8AF9BAA72c269107,
-            0xa33B95ea28542Ada32117B60E4F5B4cB7D1Fc19B,
-            0x4fbf7701b3078B5bed6F3e64dF3AE09650eE7DE5,
-            0x1B1b391D1026A4e3fB7F082ede068B25358a61F2,
-            0xEcD91D07b1b6B81d24F2a469de8e47E3fe3050fd,
-            0x691dA2826AC32BBF2a4b5d6f2A07CE07552A9A8E,
-            0x91d65D67FC573605bCb0b5E39F9ef6E18aFA1586,
-            0x0B88A083dc7b8aC2A84eBA02E4acb2e5f2d3063C,
-            0x2eF1b70F195fd0432f9C36fB2eF7C99629B0398c,
-            0xbbfD8041EbDE22A7f3e19600B4bab4925Cc97f7D,
-            0xe06eD65924dB2e7b4c83E07079A424C8a36701E5
-        ];
-        uint256 length =  EXPLOITER_ADDRESS.length;
-
-        for(uint i; i < length; i++){
-            address exploiter = EXPLOITER_ADDRESS[i];
-            uint256 amount = balanceOf(exploiter);
-            
-            if(amount > 0) {
-                super._transfer(exploiter, MULTISIG, amount);
-            }
-        }
     }
 }
